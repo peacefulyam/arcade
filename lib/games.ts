@@ -27,7 +27,7 @@ export const games: GameEntry[] = [
     slug: "breakout",
     title: "Breakout",
     blurb: "One paddle, one ball, a wall of bricks to clear.",
-    status: "coming-soon",
+    status: "playable",
     accentText: "text-ambercab",
     accentBorder: "hover:border-ambercab",
     accentChip: "border-ambercab text-ambercab",
