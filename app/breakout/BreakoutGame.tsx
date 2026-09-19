@@ -66,6 +66,20 @@ export default function BreakoutGame() {
   });
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+
+  // ── Debug overlay (toggled with V) ─────────────────────────────────────
+  // Per-tick numbers live in refs — NOT state — so the 60Hz ticker can write
+  // them straight into the DOM without re-rendering React (same reason the
+  // sim state itself lives in a ref). `showDebug` state only mounts or
+  // unmounts the box; the ticker paints into it when present.
+  const debugElRef = useRef<HTMLDivElement | null>(null);
+  const prevPaddleXRef = useRef<number | null>(null);
+  const paddleVelRef = useRef(0);
+  const ballDistRef = useRef(0);
+  // Last ball departure direction, degrees from straight-up (+ = right).
+  // Captured on launch + every bounce (see `events`); null until first launch.
+  const lastDepartRef = useRef<number | null>(null);
 
   // Push one field into its ref AND mirror it to React (for buttons).
   const setPausedBoth = (v: boolean) => {
@@ -87,14 +101,37 @@ export default function BreakoutGame() {
     // ticker closure reads the CURRENT one via a getter — see below.
     let state = createInitialState(config, 0);
     stateRef.current = state;
+    prevPaddleXRef.current = state.paddle.x;
+
+    // Snapshot the ball's post-bounce heading as degrees-from-vertical
+    // (up = 0°, right = +). Engine callbacks fire synchronously inside the
+    // tick, AFTER velocity is updated — so `state` already holds the new
+    // departure vector when these run.
+    const recordDeparture = () => {
+      const v = state.ball.vel;
+      if (v.x === 0 && v.y === 0) return;
+      lastDepartRef.current = (Math.atan2(v.x, -v.y) * 180) / Math.PI;
+    };
 
     // Engine events → sound. (A future high-score table hooks onWin/onGameOver
     // right here, next to the sound calls — same pattern, new subscriber.)
     const events = {
-      onLaunch: () => sound.launch(),
-      onWallBounce: () => sound.wall(),
-      onPaddleBounce: () => sound.paddle(),
-      onBrickHit: () => sound.brickHit(),
+      onLaunch: () => {
+        sound.launch();
+        recordDeparture();
+      },
+      onWallBounce: () => {
+        sound.wall();
+        recordDeparture();
+      },
+      onPaddleBounce: () => {
+        sound.paddle();
+        recordDeparture();
+      },
+      onBrickHit: () => {
+        sound.brickHit();
+        recordDeparture();
+      },
       onBrickDestroyed: () => sound.brickDestroyed(),
       onLifeLost: () => sound.lifeLost(),
       onWin: () => sound.win(),
@@ -147,6 +184,10 @@ export default function BreakoutGame() {
         case "r":
         case "R":
           resetRef.current?.();
+          break;
+        case "v":
+        case "V":
+          setShowDebug((s) => !s);
           break;
       }
     };
@@ -204,6 +245,10 @@ export default function BreakoutGame() {
       resetRef.current = () => {
         state = createInitialState(config, 0);
         stateRef.current = state;
+        prevPaddleXRef.current = state.paddle.x;
+        paddleVelRef.current = 0;
+        ballDistRef.current = 0;
+        lastDepartRef.current = null;
         inputRef.current.pointerX = null;
         renderer!.rebuildBricks(state.bricks);
         renderer!.sync(state);
@@ -226,6 +271,28 @@ export default function BreakoutGame() {
         updateGame(state, inputRef.current, dt, config, events);
         renderer!.sync(state);
         pushHud(); // cheap: setState bails out when nothing changed
+
+        // ── Debug telemetry: track every tick, paint only when visible ──
+        // Tracking runs unconditionally so toggling the box mid-rally shows
+        // live numbers (no zeroed odometer, no velocity spike); only the DOM
+        // write is gated on the box being mounted.
+        const prevX = prevPaddleXRef.current ?? state.paddle.x;
+        paddleVelRef.current = dt > 0 ? (state.paddle.x - prevX) / dt : 0;
+        prevPaddleXRef.current = state.paddle.x;
+        ballDistRef.current += Math.hypot(state.ball.vel.x, state.ball.vel.y) * dt;
+        const el = debugElRef.current;
+        if (el) {
+          let bricksLeft = 0;
+          for (const b of state.bricks) if (b.alive) bricksLeft++;
+          const depart = lastDepartRef.current;
+          el.textContent =
+            `ball x,y: ${state.ball.pos.x.toFixed(1)}, ${state.ball.pos.y.toFixed(1)}\n` +
+            `bricks left: ${bricksLeft}\n` +
+            `depart deg: ${depart === null ? "--" : depart.toFixed(1)}\n` +
+            `pad x,y: ${state.paddle.x.toFixed(1)}, ${state.paddle.y.toFixed(1)}\n` +
+            `pad vel: ${paddleVelRef.current.toFixed(1)} px/s\n` +
+            `ball dist: ${ballDistRef.current.toFixed(1)} px`;
+        }
       });
       renderer.sync(state);
     })();
@@ -326,10 +393,21 @@ export default function BreakoutGame() {
             <p className="text-lg font-bold text-bone">Paused — P to resume</p>
           </div>
         )}
+        {/* Debug readout: monospace, semi-transparent, top-right. Content is
+            painted every tick via debugElRef (see ticker) — React only mounts
+            or unmounts the box on V. pointer-events-none so it never steals
+            paddle clicks. */}
+        {showDebug && (
+          <div
+            ref={debugElRef}
+            className="pointer-events-none absolute right-2 top-2 whitespace-pre rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight text-green-300"
+          />
+        )}
       </div>
 
       <p className="mt-3 text-xs leading-relaxed text-dim">
-        ←/→ or A/D to move · mouse/touch steers too · Space launches · P pauses
+        ←/→ or A/D to move · mouse/touch steers too · Space launches · P pauses · V
+        debug
       </p>
     </div>
   );
