@@ -2,6 +2,7 @@
   "name": "arcade",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@12.4.2",
   "description": "Peaceful Yamaha's browser arcade — one repo, many small games.",
   "scripts": {
     "dev": "next dev",
