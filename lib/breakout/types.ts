@@ -81,6 +81,8 @@ export interface BreakoutState {
   paddle: PaddleState;
   ball: BallState;
   bricks: BrickState[];
+  /** Custom-mode wall colliders. Empty for built-in levels. */
+  walls: WallRect[];
   /** Seconds since this attempt started. Useful for timed scoring later. */
   time: number;
 }
@@ -133,6 +135,54 @@ export interface LevelDef {
   pattern: string[];
   blurb?: string;
 }
+
+/**
+ * A custom-level wall: an AXIS-ALIGNED solid rect the ball bounces off.
+ * The editor paints wall CELLS on a grid; custom.ts merges runs of cells
+ * into these rects so the ball meets clean faces instead of per-cell seams.
+ * Walls are indestructible and worth no points — only `bricks` clear a level.
+ */
+export interface WallRect {
+  x: number; // left edge, in world pixels
+  y: number; // top edge, in world pixels
+  w: number;
+  h: number;
+}
+
+/**
+ * A player-designed level, persisted in localStorage (see custom.ts).
+ * `rows` is GRID_ROWS strings of GRID_COLS "0"/"1" chars ("1" = solid wall).
+ * Bricks are auto-filled around the walls at load time, so the def stores
+ * only the walls plus two OPTIONAL refinements (absent = defaults, which is
+ * also how older saves keep loading):
+ *   blockGap — gap between the lowest blocks and the paddle, in BLOCK
+ *     heights (the editor slider). The field always starts at the built-in
+ *     brickTop; the slider moves where it ENDS.
+ *   removed — erased-block cutout rects (world px); any fill brick whose
+ *     CENTER falls inside one is dropped. Stored as rects (not fill-grid
+ *     cells) so erasures stay put when the slider reshapes the fill grid.
+ *   fillTop — LEGACY pre-slider field, ignored by the filler (kept in the
+ *     type so old saves still parse; their block start resets to default).
+ */
+export interface CustomLevelDef {
+  id: string;
+  name: string;
+  rows: string[];
+  createdAt: number;
+  updatedAt: number;
+  blockGap?: number;
+  fillTop?: number;
+  removed?: WallRect[];
+}
+
+/**
+ * Which level the game boots: a built-in ASCII level by index, or a custom
+ * wall-grid def. The React shell keys the game component on this so a switch
+ * remounts with a fresh sim (no mid-run state surgery).
+ */
+export type LevelSource =
+  | { kind: "builtin"; index: number }
+  | { kind: "custom"; level: CustomLevelDef };
 
 /**
  * Snapshot of the controls for ONE frame. The React component fills this in

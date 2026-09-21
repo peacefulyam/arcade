@@ -27,6 +27,7 @@ import type {
   BrickState,
   EngineEvents,
   InputState,
+  WallRect,
 } from "./types";
 
 /** Clamp helper used everywhere bounds matter (paddle range, hit offset…). */
@@ -64,6 +65,7 @@ export function createInitialState(
     paddle,
     ball,
     bricks: buildBricks(level, config),
+    walls: [], // built-in levels have no walls; custom.ts fills these in
     time: 0,
   };
 }
@@ -177,6 +179,8 @@ function stepBall(
   events: EngineEvents,
 ): void {
   const b = state.ball;
+  const px0 = b.pos.x;
+  const py0 = b.pos.y;
   b.pos.x += b.vel.x * dt;
   b.pos.y += b.vel.y * dt;
 
@@ -184,6 +188,8 @@ function stepBall(
   if (state.phase !== "playing") return; // fell out the bottom
   collidePaddle(state, config, events);
   collideBricks(state, config, events);
+  // Level walls run LAST (see collideLevelWalls for why the order matters).
+  collideLevelWalls(state, px0, py0, events);
 }
 
 // ── Collisions ───────────────────────────────────────────────────────────────
@@ -231,6 +237,150 @@ function collideWalls(
       stickBallToPaddle(state);
     }
   }
+}
+
+/**
+ * CUSTOM-LEVEL WALLS — SWEPT segment-vs-rect collision, not discrete overlap.
+ *
+ * WHY SWEPT: brick hits resolve penetration by shoving the ball up to ~19px
+ * in one shot. When a wall and a brick are touched in the same substep, that
+ * shove can teleport the ball clean PAST a 4.8px wall — the next substep sees
+ * no overlap and the ball "goes through the wall". Testing the whole substep
+ * PATH (pre-move position → post-brick position, which is why this pass runs
+ * LAST) against every wall catches the crossing even when a brick shove
+ * caused it, because the path itself still crosses the wall.
+ *
+ * One wall max per substep (the earliest contact): contact sits exactly one
+ * radius off the wall so no positional push is needed, velocity flips into
+ * the outward hemisphere (speed preserved — single-axis flip), and remaining
+ * motion resumes next substep. No score, no damage: walls just redirect.
+ */
+function collideLevelWalls(
+  state: BreakoutState,
+  x0: number,
+  y0: number,
+  events: EngineEvents,
+): void {
+  const b = state.ball;
+  const dx = b.pos.x - x0;
+  const dy = b.pos.y - y0;
+
+  if (dx === 0 && dy === 0) {
+    // Motionless substep: just push out of any embedding (grazes stay
+    // silent — see pushOutOfWall).
+    for (const w of state.walls) pushOutOfWall(state, w, events);
+    return;
+  }
+
+  // Earliest swept contact: segment vs rect expanded by the ball radius
+  // (slab method). t in [0,1]; the LAST-entered slab owns the contact normal.
+  let bestT = Infinity;
+  let bestNX = 0;
+  let bestNY = 0;
+  let embedded: WallRect | null = null;
+  for (const w of state.walls) {
+    const r = b.radius;
+    const minX = w.x - r;
+    const maxX = w.x + w.w + r;
+    const minY = w.y - r;
+    const maxY = w.y + w.h + r;
+    let tNearX: number, tFarX: number, nx: number;
+    if (dx === 0) {
+      if (x0 < minX || x0 > maxX) continue;
+      tNearX = -Infinity;
+      tFarX = Infinity;
+      nx = 0;
+    } else if (dx > 0) {
+      tNearX = (minX - x0) / dx;
+      tFarX = (maxX - x0) / dx;
+      nx = -1;
+    } else {
+      tNearX = (maxX - x0) / dx;
+      tFarX = (minX - x0) / dx;
+      nx = 1;
+    }
+    let tNearY: number, tFarY: number, ny: number;
+    if (dy === 0) {
+      if (y0 < minY || y0 > maxY) continue;
+      tNearY = -Infinity;
+      tFarY = Infinity;
+      ny = 0;
+    } else if (dy > 0) {
+      tNearY = (minY - y0) / dy;
+      tFarY = (maxY - y0) / dy;
+      ny = -1;
+    } else {
+      tNearY = (maxY - y0) / dy;
+      tFarY = (minY - y0) / dy;
+      ny = 1;
+    }
+    const tEnter = Math.max(tNearX, tNearY);
+    const tExit = Math.min(tFarX, tFarY);
+    if (tEnter > tExit || tExit < 0 || tEnter > 1) continue; // miss
+    if (tEnter < 0) {
+      embedded = w; // path starts inside: discrete push-out below
+      break;
+    }
+    if (tEnter < bestT) {
+      bestT = tEnter;
+      // Exact corner ties follow the faster axis (a diagonal corner graze
+      // keeps the motion's dominant direction).
+      if (tNearX > tNearY) {
+        bestNX = nx;
+        bestNY = 0;
+      } else if (tNearY > tNearX) {
+        bestNX = 0;
+        bestNY = ny;
+      } else if (Math.abs(dx) >= Math.abs(dy)) {
+        bestNX = nx;
+        bestNY = 0;
+      } else {
+        bestNX = 0;
+        bestNY = ny;
+      }
+    }
+  }
+
+  if (embedded) {
+    pushOutOfWall(state, embedded, events);
+    return;
+  }
+  if (bestT === Infinity || (bestNX === 0 && bestNY === 0)) return; // miss
+  b.pos.x = x0 + dx * bestT;
+  b.pos.y = y0 + dy * bestT;
+  if (bestNX !== 0) {
+    b.vel.x = bestNX > 0 ? Math.abs(b.vel.x) : -Math.abs(b.vel.x);
+  } else {
+    b.vel.y = bestNY > 0 ? Math.abs(b.vel.y) : -Math.abs(b.vel.y);
+  }
+  events.onWallBounce?.();
+}
+
+/**
+ * Discrete push-out for a ball starting a substep EMBEDDED in a wall (e.g. a
+ * brick shove wedged it in): out along the shallower axis, velocity into the
+ * outward hemisphere. Grazes (penetration ~0) are ignored WITHOUT an event —
+ * a ball sliding along a wall face must not machine-gun the bounce sound.
+ */
+function pushOutOfWall(
+  state: BreakoutState,
+  w: WallRect,
+  events: EngineEvents,
+): void {
+  const b = state.ball;
+  const centerX = w.x + w.w / 2;
+  const centerY = w.y + w.h / 2;
+  const penX = w.w / 2 + b.radius - Math.abs(b.pos.x - centerX);
+  const penY = w.h / 2 + b.radius - Math.abs(b.pos.y - centerY);
+  if (Math.min(penX, penY) <= 1e-9) return; // touching, not embedded
+  if (penX < penY) {
+    b.vel.x = b.pos.x < centerX ? -Math.abs(b.vel.x) : Math.abs(b.vel.x);
+    b.pos.x += b.pos.x < centerX ? -penX : penX;
+  } else {
+    b.vel.y = b.pos.y < centerY ? -Math.abs(b.vel.y) : Math.abs(b.vel.y);
+    b.pos.y += b.pos.y < centerY ? -penY : penY;
+  }
+  events.onWallBounce?.();
 }
 
 /**

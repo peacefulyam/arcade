@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import BreakoutGame from "./BreakoutGame";
+import BreakoutManager from "./BreakoutManager";
 import { getGame } from "@/lib/games";
 
 export const metadata = {
@@ -25,7 +25,7 @@ export default function BreakoutPage() {
       <p className="mt-3 max-w-md text-sm leading-relaxed text-dim">{game.blurb}</p>
 
       <div className="mx-auto mt-6 max-w-[480px]">
-        <BreakoutGame />
+        <BreakoutManager />
       </div>
 
       {/* Where the code lives, for the curious reader-developer. */}
@@ -61,6 +61,18 @@ export default function BreakoutPage() {
           <li>
             <code>app/breakout/BreakoutGame.tsx</code> — React wiring: input,
             ticker, HUD.
+          </li>
+          <li>
+            <code>lib/breakout/custom.ts</code> — custom levels: wall grid,
+            wall merging, half-size block auto-fill, localStorage.
+          </li>
+          <li>
+            <code>app/breakout/CustomEditor.tsx</code> — the drawing-app wall
+            editor + live preview window.
+          </li>
+          <li>
+            <code>app/breakout/BreakoutManager.tsx</code> — Play / Custom
+            levels / Editor tabs: create, edit, delete, playtest.
           </li>
         </ul>
       </details>

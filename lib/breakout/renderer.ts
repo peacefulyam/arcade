@@ -20,7 +20,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Container, Graphics } from "pixi.js";
 import type { Application } from "pixi.js";
-import type { BreakoutConfig, BreakoutState, BrickState } from "./types";
+import type {
+  BreakoutConfig,
+  BreakoutState,
+  BrickState,
+  WallRect,
+} from "./types";
 
 /** Darken a hex color toward black by `t` (0 = same, 1 = black). Used to show
  *  a tough brick's damage: full color at full hp, dimmer as hp drops. */
@@ -37,6 +42,8 @@ export class BreakoutRenderer {
   private paddleG = new Graphics();
   private ballG = new Graphics();
   private brickLayer = new Container();
+  /** Static custom-level walls. Empty for built-in levels — see rebuildWalls. */
+  private wallLayer = new Container();
   /** Brick id → its Graphics, so per-frame sync is a Map lookup, no search. */
   private brickG = new Map<number, Graphics>();
 
@@ -51,6 +58,10 @@ export class BreakoutRenderer {
     bg.roundRect(0, 0, worldW, worldH, 10).fill(0x17171d);
     bg.stroke({ width: 2, color: 0x2a2a33 });
     this.world.addChild(bg);
+
+    // Custom-level walls sit right above the back panel (below everything
+    // dynamic): static geometry, drawn once per level, never per frame.
+    this.world.addChild(this.wallLayer);
 
     // Paddle: drawn ONCE centered on its own origin (−w/2…w/2), so per-frame
     // we just do `paddleG.position.set(paddle.x, paddle.y + h/2)`.
@@ -88,6 +99,20 @@ export class BreakoutRenderer {
       g.visible = brick.alive;
       this.brickLayer.addChild(g);
       this.brickG.set(brick.id, g);
+    }
+  }
+
+  /**
+   * (Re)build wall Graphics from merged WallRects — called on mount and on
+   * restart, NOT every frame. Walls are flat slate bars, visually distinct
+   * from the bright bricks: geometry you bounce off, not targets you break.
+   */
+  rebuildWalls(walls: WallRect[]): void {
+    this.wallLayer.removeChildren();
+    for (const w of walls) {
+      const g = new Graphics();
+      g.rect(w.x, w.y, w.w, w.h).fill(0x5b6b8c);
+      this.wallLayer.addChild(g);
     }
   }
 

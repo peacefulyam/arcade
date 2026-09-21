@@ -27,12 +27,14 @@ import {
   updateGame,
 } from "@/lib/breakout/engine";
 import { LEVELS } from "@/lib/breakout/levels";
+import { createCustomState } from "@/lib/breakout/custom";
 import { BreakoutRenderer } from "@/lib/breakout/renderer";
 import { SoundBank } from "@/lib/breakout/sound";
 import type {
   BreakoutState,
   GamePhase,
   InputState,
+  LevelSource,
 } from "@/lib/breakout/types";
 
 /** The tiny slice of game state React actually renders (see header). */
@@ -43,9 +45,13 @@ interface Hud {
   levelName: string;
 }
 
-export default function BreakoutGame() {
+export default function BreakoutGame({ source }: { source: LevelSource }) {
   // The canvas's parent div. Pixi's canvas gets mounted INSIDE it.
   const containerRef = useRef<HTMLDivElement>(null);
+  // Level source is fixed per mount: the parent keys on it, so a level switch
+  // remounts with a fresh sim instead of mid-run surgery. The ref freezes the
+  // first value for the boot effect below.
+  const sourceRef = useRef(source);
 
   // Mutable game-loop ownership (never triggers renders on their own)…
   const stateRef = useRef<BreakoutState | null>(null);
@@ -62,7 +68,8 @@ export default function BreakoutGame() {
     score: 0,
     lives: DEFAULT_CONFIG.lives,
     phase: "aim",
-    levelName: LEVELS[0].name,
+    levelName:
+      source.kind === "custom" ? source.level.name : LEVELS[source.index % LEVELS.length].name,
   });
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -97,9 +104,19 @@ export default function BreakoutGame() {
 
     const config = DEFAULT_CONFIG;
     const sound = soundRef.current!;
-    // `state` is `let` (not const): reset() swaps in a fresh object and the
-    // ticker closure reads the CURRENT one via a getter — see below.
-    let state = createInitialState(config, 0);
+    const src = sourceRef.current;
+    // Fresh sim for this mount's level source (built-in ASCII or custom
+    // wall-grid). `state` is `let` (not const): reset() swaps in a fresh
+    // object and the ticker closure reads the CURRENT one — see below.
+    const makeState = (): BreakoutState =>
+      src.kind === "custom"
+        ? createCustomState(config, src.level)
+        : createInitialState(config, src.index);
+    const levelName =
+      src.kind === "custom"
+        ? src.level.name
+        : LEVELS[src.index % LEVELS.length].name;
+    let state = makeState();
     stateRef.current = state;
     prevPaddleXRef.current = state.paddle.x;
 
@@ -148,7 +165,7 @@ export default function BreakoutGame() {
               score: state.score,
               lives: state.lives,
               phase: state.phase,
-              levelName: LEVELS[state.levelIndex % LEVELS.length].name,
+              levelName,
             },
       );
     };
@@ -238,12 +255,13 @@ export default function BreakoutGame() {
       app = created;
       renderer = new BreakoutRenderer(app, config);
       renderer.rebuildBricks(state.bricks);
+      renderer.rebuildWalls(state.walls);
 
-      // Restart without reloading: swap in a fresh sim, rebuild brick
+      // Restart without reloading: swap in a fresh sim, rebuild brick + wall
       // Graphics to match, unpause. The ticker/closures capture the `state`
       // VARIABLE (declared `let`), so they automatically see the new object.
       resetRef.current = () => {
-        state = createInitialState(config, 0);
+        state = makeState();
         stateRef.current = state;
         prevPaddleXRef.current = state.paddle.x;
         paddleVelRef.current = 0;
@@ -251,6 +269,7 @@ export default function BreakoutGame() {
         lastDepartRef.current = null;
         inputRef.current.pointerX = null;
         renderer!.rebuildBricks(state.bricks);
+        renderer!.rebuildWalls(state.walls);
         renderer!.sync(state);
         setPausedBoth(false);
         pushHud();
